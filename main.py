@@ -104,7 +104,7 @@ def analyze_image(image_url):
         aspect_ratio = metrics["aspect_ratio"]
 
         # Contenuto chiaramente troppo piccolo
-        if content_ratio < 0.10:
+        if content_ratio < 0.06:
             return {
                 "ok": True,
                 "status": "yellow",
@@ -113,7 +113,7 @@ def analyze_image(image_url):
             }
 
         # Contenuto chiaramente troppo rettangolare
-        if aspect_ratio < 0.35 or aspect_ratio > 2.8:
+        if aspect_ratio < 0.22 or aspect_ratio > 4.2:
             return {
                 "ok": True,
                 "status": "yellow",
