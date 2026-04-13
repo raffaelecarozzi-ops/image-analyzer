@@ -5,7 +5,7 @@ from io import BytesIO
 
 app = Flask(__name__)
 
-def is_near_white(pixel, threshold=245):
+def is_near_white(pixel, threshold=235):
     r, g, b = pixel[:3]
     return r >= threshold and g >= threshold and b >= threshold
 
@@ -84,7 +84,7 @@ def analyze_image(image_url):
         metrics = get_content_box_metrics(img)
 
         # Fondo diverso da bianco => giallo
-        if border_white_ratio < 0.82:
+        if border_white_ratio < 0.78:
             return {
                 "ok": True,
                 "status": "yellow",
