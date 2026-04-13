@@ -83,16 +83,16 @@ def analyze_image(image_url):
         border_white_ratio = get_border_white_ratio(img)
         metrics = get_content_box_metrics(img)
 
-        # Fondo chiaramente non bianco
-        if border_white_ratio < 0.80:
+        # Fondo diverso da bianco => giallo
+        if border_white_ratio < 0.88:
             return {
                 "ok": True,
                 "status": "yellow",
-                "reason": "background_clearly_not_white",
+                "reason": "background_not_white",
                 "border_white_ratio": round(border_white_ratio, 4)
             }
 
-        # Immagine praticamente vuota ma pulita
+        # Immagine praticamente vuota ma con sfondo bianco
         if not metrics["has_content"]:
             return {
                 "ok": True,
@@ -103,7 +103,7 @@ def analyze_image(image_url):
         content_ratio = metrics["content_ratio"]
         aspect_ratio = metrics["aspect_ratio"]
 
-        # Contenuto chiaramente troppo piccolo nel canvas
+        # Contenuto chiaramente troppo piccolo
         if content_ratio < 0.10:
             return {
                 "ok": True,
