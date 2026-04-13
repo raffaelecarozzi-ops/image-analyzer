@@ -84,7 +84,7 @@ def analyze_image(image_url):
         metrics = get_content_box_metrics(img)
 
         # Fondo diverso da bianco => giallo
-        if border_white_ratio < 0.88:
+        if border_white_ratio < 0.82:
             return {
                 "ok": True,
                 "status": "yellow",
