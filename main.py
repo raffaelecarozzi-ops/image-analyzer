@@ -5,48 +5,36 @@ from io import BytesIO
 
 app = Flask(__name__)
 
+WHITE_THRESHOLD = 225
+BORDER_WHITE_MIN = 0.65
+CONTENT_RATIO_MIN = 0.045
+ASPECT_RATIO_MIN = 0.18
+ASPECT_RATIO_MAX = 5.0
 
-def is_near_white(pixel, threshold=225):
-    """
-    Considera 'bianco' un pixel abbastanza chiaro.
-    threshold più basso = più tolleranza verso bianchi non perfetti.
-    """
+
+def is_near_white(pixel, threshold=WHITE_THRESHOLD):
     r, g, b = pixel[:3]
     return r >= threshold and g >= threshold and b >= threshold
 
 
 def get_border_white_ratio(img):
-    """
-    Calcola quanta parte del bordo esterno dell'immagine è bianca.
-    Ritorna un numero tra 0 e 1.
-    """
     width, height = img.size
     pixels = []
-
     step = max(1, min(width, height) // 120)
 
-    # bordo superiore + inferiore
     for x in range(0, width, step):
         pixels.append(img.getpixel((x, 0)))
         pixels.append(img.getpixel((x, height - 1)))
 
-    # bordo sinistro + destro
     for y in range(0, height, step):
         pixels.append(img.getpixel((0, y)))
         pixels.append(img.getpixel((width - 1, y)))
 
-    white_count = sum(1 for p in pixels if is_near_white(p, 225))
+    white_count = sum(1 for p in pixels if is_near_white(p))
     return white_count / max(1, len(pixels))
 
 
 def get_content_box_metrics(img):
-    """
-    Cerca l'area occupata dal contenuto non bianco.
-    Restituisce:
-    - has_content
-    - content_ratio = quanta area del canvas occupa il bounding box del contenuto
-    - aspect_ratio = larghezza / altezza del bounding box
-    """
     width, height = img.size
     coords = []
 
@@ -56,7 +44,7 @@ def get_content_box_metrics(img):
     for y in range(0, height, step_y):
         for x in range(0, width, step_x):
             pixel = img.getpixel((x, y))
-            if not is_near_white(pixel, 225):
+            if not is_near_white(pixel):
                 coords.append((x, y))
 
     if not coords:
@@ -85,24 +73,34 @@ def get_content_box_metrics(img):
     }
 
 
+def build_response(ok, status, reason, border_white_ratio=None, content_ratio=None, aspect_ratio=None):
+    return {
+        "ok": ok,
+        "status": status,
+        "reason": reason,
+        "border_white_ratio": round(border_white_ratio, 4) if border_white_ratio is not None else None,
+        "content_ratio": round(content_ratio, 4) if content_ratio is not None else None,
+        "aspect_ratio": round(aspect_ratio, 4) if aspect_ratio is not None else None,
+        "debug_thresholds": {
+            "WHITE_THRESHOLD": WHITE_THRESHOLD,
+            "BORDER_WHITE_MIN": BORDER_WHITE_MIN,
+            "CONTENT_RATIO_MIN": CONTENT_RATIO_MIN,
+            "ASPECT_RATIO_MIN": ASPECT_RATIO_MIN,
+            "ASPECT_RATIO_MAX": ASPECT_RATIO_MAX
+        }
+    }
+
+
 def analyze_image(image_url):
     try:
         response = requests.get(image_url, timeout=20)
 
         if response.status_code != 200:
-            return {
-                "ok": False,
-                "status": "red",
-                "reason": f"http_{response.status_code}"
-            }
+            return build_response(False, "red", f"http_{response.status_code}")
 
         content_type = response.headers.get("Content-Type", "")
         if not content_type.startswith("image/"):
-            return {
-                "ok": False,
-                "status": "red",
-                "reason": "not_image"
-            }
+            return build_response(False, "red", "not_image")
 
         img = Image.open(BytesIO(response.content)).convert("RGB")
 
@@ -112,73 +110,72 @@ def analyze_image(image_url):
         content_ratio = metrics["content_ratio"]
         aspect_ratio = metrics["aspect_ratio"]
 
-        # 1) Fondo diverso da bianco => giallo
-        if border_white_ratio < 0.65:
-            return {
-                "ok": True,
-                "status": "yellow",
-                "reason": "background_not_white",
-                "border_white_ratio": round(border_white_ratio, 4),
-                "content_ratio": round(content_ratio, 4),
-                "aspect_ratio": round(aspect_ratio, 4)
-            }
+        if border_white_ratio < BORDER_WHITE_MIN:
+            return build_response(
+                True,
+                "yellow",
+                "background_not_white",
+                border_white_ratio,
+                content_ratio,
+                aspect_ratio
+            )
 
-        # 2) Nessun contenuto rilevato ma fondo bianco
         if not metrics["has_content"]:
-            return {
-                "ok": True,
-                "status": "green",
-                "reason": "white_background_empty",
-                "border_white_ratio": round(border_white_ratio, 4),
-                "content_ratio": round(content_ratio, 4),
-                "aspect_ratio": round(aspect_ratio, 4)
-            }
+            return build_response(
+                True,
+                "green",
+                "white_background_empty",
+                border_white_ratio,
+                content_ratio,
+                aspect_ratio
+            )
 
-        # 3) Contenuto chiaramente troppo piccolo
-        if content_ratio < 0.045:
-            return {
-                "ok": True,
-                "status": "yellow",
-                "reason": "content_clearly_too_small",
-                "border_white_ratio": round(border_white_ratio, 4),
-                "content_ratio": round(content_ratio, 4),
-                "aspect_ratio": round(aspect_ratio, 4)
-            }
+        if content_ratio < CONTENT_RATIO_MIN:
+            return build_response(
+                True,
+                "yellow",
+                "content_clearly_too_small",
+                border_white_ratio,
+                content_ratio,
+                aspect_ratio
+            )
 
-        # 4) Contenuto chiaramente troppo rettangolare / anomalo
-        if aspect_ratio < 0.18 or aspect_ratio > 5.0:
-            return {
-                "ok": True,
-                "status": "yellow",
-                "reason": "content_clearly_too_rectangular",
-                "border_white_ratio": round(border_white_ratio, 4),
-                "content_ratio": round(content_ratio, 4),
-                "aspect_ratio": round(aspect_ratio, 4)
-            }
+        if aspect_ratio < ASPECT_RATIO_MIN or aspect_ratio > ASPECT_RATIO_MAX:
+            return build_response(
+                True,
+                "yellow",
+                "content_clearly_too_rectangular",
+                border_white_ratio,
+                content_ratio,
+                aspect_ratio
+            )
 
-        # 5) Tutto ok
-        return {
-            "ok": True,
-            "status": "green",
-            "reason": "white_background_ok",
-            "border_white_ratio": round(border_white_ratio, 4),
-            "content_ratio": round(content_ratio, 4),
-            "aspect_ratio": round(aspect_ratio, 4)
-        }
+        return build_response(
+            True,
+            "green",
+            "white_background_ok",
+            border_white_ratio,
+            content_ratio,
+            aspect_ratio
+        )
 
     except Exception as e:
-        return {
-            "ok": False,
-            "status": "red",
-            "reason": str(e)
-        }
+        return build_response(False, "red", str(e))
 
 
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({
         "ok": True,
-        "message": "Analyzer online"
+        "message": "Analyzer online",
+        "version": "debug-v2",
+        "thresholds": {
+            "WHITE_THRESHOLD": WHITE_THRESHOLD,
+            "BORDER_WHITE_MIN": BORDER_WHITE_MIN,
+            "CONTENT_RATIO_MIN": CONTENT_RATIO_MIN,
+            "ASPECT_RATIO_MIN": ASPECT_RATIO_MIN,
+            "ASPECT_RATIO_MAX": ASPECT_RATIO_MAX
+        }
     }), 200
 
 
@@ -188,11 +185,7 @@ def analyze():
     image_url = str(data.get("image_url", "")).strip()
 
     if not image_url:
-        return jsonify({
-            "ok": False,
-            "status": "red",
-            "reason": "missing_url"
-        }), 400
+        return jsonify(build_response(False, "red", "missing_url")), 400
 
     result = analyze_image(image_url)
     return jsonify(result), 200
