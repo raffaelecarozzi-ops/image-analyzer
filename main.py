@@ -13,9 +13,8 @@ ASPECT_RATIO_MIN = 0.18
 ASPECT_RATIO_MAX = 5.0
 
 MAX_BATCH_ITEMS = 25
-MAX_WORKERS = 5
+MAX_WORKERS = 3
 
-session = requests.Session()
 
 
 def is_near_white(pixel, threshold=WHITE_THRESHOLD):
@@ -99,7 +98,7 @@ def build_response(ok, status, reason, border_white_ratio=None, content_ratio=No
 
 def analyze_image(image_url):
     try:
-        response = session.get(image_url, timeout=20)
+        response = session.request.get(image_url, timeout=20)
 
         if response.status_code != 200:
             return build_response(False, "red", f"http_{response.status_code}")
