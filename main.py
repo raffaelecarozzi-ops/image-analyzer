@@ -102,7 +102,11 @@ def analyze_image(image_url):
         if not content_type.startswith("image/"):
             return build_response(False, "red", "not_image")
 
-        img = Image.open(BytesIO(response.content)).convert("RGB")
+        img = Image.open(BytesIO(response.content)).convert("RGBA")
+
+        # Appoggia eventuale trasparenza su fondo bianco
+        white_bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(white_bg, img).convert("RGB")
 
         border_white_ratio = get_border_white_ratio(img)
         metrics = get_content_box_metrics(img)
@@ -168,7 +172,7 @@ def health():
     return jsonify({
         "ok": True,
         "message": "Analyzer online",
-        "version": "debug-v2",
+        "version": "debug-v3-alpha-fix",
         "thresholds": {
             "WHITE_THRESHOLD": WHITE_THRESHOLD,
             "BORDER_WHITE_MIN": BORDER_WHITE_MIN,
