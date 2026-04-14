@@ -113,7 +113,7 @@ def analyze_image(image_url):
         aspect_ratio = metrics["aspect_ratio"]
 
         # 1) Fondo diverso da bianco => giallo
-        if border_white_ratio < 0.72:
+        if border_white_ratio < 0.65:
             return {
                 "ok": True,
                 "status": "yellow",
