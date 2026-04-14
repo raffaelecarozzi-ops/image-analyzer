@@ -98,7 +98,7 @@ def build_response(ok, status, reason, border_white_ratio=None, content_ratio=No
 
 def analyze_image(image_url):
     try:
-        response = session.request.get(image_url, timeout=20)
+        response = request.get(image_url, timeout=20)
 
         if response.status_code != 200:
             return build_response(False, "red", f"http_{response.status_code}")
