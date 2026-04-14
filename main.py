@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from PIL import Image
 import requests
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 
@@ -10,6 +11,11 @@ BORDER_WHITE_MIN = 0.65
 CONTENT_RATIO_MIN = 0.045
 ASPECT_RATIO_MIN = 0.18
 ASPECT_RATIO_MAX = 5.0
+
+MAX_BATCH_ITEMS = 25
+MAX_WORKERS = 5
+
+session = requests.Session()
 
 
 def is_near_white(pixel, threshold=WHITE_THRESHOLD):
@@ -93,7 +99,7 @@ def build_response(ok, status, reason, border_white_ratio=None, content_ratio=No
 
 def analyze_image(image_url):
     try:
-        response = requests.get(image_url, timeout=20)
+        response = session.get(image_url, timeout=20)
 
         if response.status_code != 200:
             return build_response(False, "red", f"http_{response.status_code}")
@@ -167,18 +173,35 @@ def analyze_image(image_url):
         return build_response(False, "red", str(e))
 
 
+def analyze_image_with_url(image_url):
+    image_url = str(image_url or "").strip()
+
+    if not image_url:
+        result = build_response(False, "red", "missing_url")
+    else:
+        result = analyze_image(image_url)
+
+    result["url"] = image_url
+    return result
+
+
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({
         "ok": True,
         "message": "Analyzer online",
-        "version": "debug-v3-alpha-fix",
+        "version": "debug-v4-batch",
         "thresholds": {
             "WHITE_THRESHOLD": WHITE_THRESHOLD,
             "BORDER_WHITE_MIN": BORDER_WHITE_MIN,
             "CONTENT_RATIO_MIN": CONTENT_RATIO_MIN,
             "ASPECT_RATIO_MIN": ASPECT_RATIO_MIN,
             "ASPECT_RATIO_MAX": ASPECT_RATIO_MAX
+        },
+        "batch": {
+            "enabled": True,
+            "max_batch_items": MAX_BATCH_ITEMS,
+            "max_workers": MAX_WORKERS
         }
     }), 200
 
@@ -193,6 +216,42 @@ def analyze():
 
     result = analyze_image(image_url)
     return jsonify(result), 200
+
+
+@app.route("/analyze-batch", methods=["POST"])
+def analyze_batch():
+    data = request.get_json(silent=True) or {}
+    image_urls = data.get("image_urls", [])
+
+    if not isinstance(image_urls, list):
+        return jsonify({
+            "success": False,
+            "reason": "image_urls_must_be_array",
+            "results": []
+        }), 400
+
+    if len(image_urls) == 0:
+        return jsonify({
+            "success": False,
+            "reason": "missing_image_urls",
+            "results": []
+        }), 400
+
+    if len(image_urls) > MAX_BATCH_ITEMS:
+        return jsonify({
+            "success": False,
+            "reason": f"batch_too_large_max_{MAX_BATCH_ITEMS}",
+            "results": []
+        }), 400
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        results = list(executor.map(analyze_image_with_url, image_urls))
+
+    return jsonify({
+        "success": True,
+        "count": len(results),
+        "results": results
+    }), 200
 
 
 if __name__ == "__main__":
