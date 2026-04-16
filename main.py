@@ -5,7 +5,7 @@ from io import BytesIO
 
 app = Flask(__name__)
 
-WHITE_THRESHOLD = 225
+WHITE_THRESHOLD = 240
 BORDER_WHITE_MIN = 0.65
 CONTENT_RATIO_MIN = 0.06
 ASPECT_RATIO_MIN = 0.18
