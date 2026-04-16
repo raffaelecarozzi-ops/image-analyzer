@@ -5,9 +5,10 @@ from io import BytesIO
 
 app = Flask(__name__)
 
-WHITE_THRESHOLD = 240
+# --- CONFIG ---
+WHITE_THRESHOLD = 245
 BORDER_WHITE_MIN = 0.65
-CONTENT_RATIO_MIN = 0.06
+CONTENT_RATIO_MIN = 0.045
 ASPECT_RATIO_MIN = 0.18
 ASPECT_RATIO_MAX = 5.0
 
@@ -104,7 +105,7 @@ def analyze_image(image_url):
 
         img = Image.open(BytesIO(response.content)).convert("RGBA")
 
-        # Appoggia eventuale trasparenza su fondo bianco
+        # Fondo bianco per trasparenze
         white_bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
         img = Image.alpha_composite(white_bg, img).convert("RGB")
 
@@ -114,6 +115,7 @@ def analyze_image(image_url):
         content_ratio = metrics["content_ratio"]
         aspect_ratio = metrics["aspect_ratio"]
 
+        # --- LOGICA ---
         if border_white_ratio < BORDER_WHITE_MIN:
             return build_response(
                 True,
@@ -172,7 +174,7 @@ def health():
     return jsonify({
         "ok": True,
         "message": "Analyzer online",
-        "version": "stable-single-v1",
+        "version": "final-white245",
         "thresholds": {
             "WHITE_THRESHOLD": WHITE_THRESHOLD,
             "BORDER_WHITE_MIN": BORDER_WHITE_MIN,
