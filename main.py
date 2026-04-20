@@ -14,9 +14,10 @@ CONTENT_RATIO_MIN = 0.045
 ASPECT_RATIO_MIN = 0.18
 ASPECT_RATIO_MAX = 5.0
 
-# Nuovo controllo per "immagine dentro immagine"
-INNER_FRAME_OFFSET_RATIO = 0.10
-INNER_FRAME_WHITE_MIN = 0.78
+# Controllo "immagine dentro immagine"
+INNER_FRAME_OFFSETS = [0.06, 0.10, 0.14]
+INNER_FRAME_WHITE_MIN = 0.86
+INNER_FRAME_REQUIRED_FAILS = 2
 
 
 # =========================
@@ -51,11 +52,10 @@ def get_border_white_ratio(img):
     return white_count / max(1, len(pixels))
 
 
-def get_inner_frame_white_ratio(img, offset_ratio=INNER_FRAME_OFFSET_RATIO):
+def get_inner_frame_white_ratio(img, offset_ratio):
     """
-    Controlla una cornice interna al canvas.
-    Serve a intercettare casi in cui dentro il 1080x1080 è stata inserita
-    un’altra immagine rettangolare con sfondo non coerente.
+    Controlla una cornice interna ma campiona soprattutto i tratti laterali,
+    per evitare che il prodotto centrale falsi il risultato.
     """
     width, height = img.size
     pixels = []
@@ -65,20 +65,66 @@ def get_inner_frame_white_ratio(img, offset_ratio=INNER_FRAME_OFFSET_RATIO):
     y1 = int(height * offset_ratio)
     y2 = int(height * (1 - offset_ratio))
 
-    step = max(1, min(width, height) // 120)
+    if x2 <= x1 or y2 <= y1:
+        return 1.0
 
-    # linee orizzontali interne
-    for x in range(x1, x2, step):
+    step = max(1, min(width, height) // 140)
+
+    # Campiono solo segmenti laterali / periferici delle linee interne
+    # così il centro (dove spesso sta il prodotto) pesa meno.
+    x_left_end = int(x1 + (x2 - x1) * 0.28)
+    x_right_start = int(x1 + (x2 - x1) * 0.72)
+
+    y_top_end = int(y1 + (y2 - y1) * 0.28)
+    y_bottom_start = int(y1 + (y2 - y1) * 0.72)
+
+    # linee orizzontali interne: solo lati sinistro e destro
+    for x in range(x1, x_left_end, step):
         pixels.append(safe_getpixel(img, x, y1))
         pixels.append(safe_getpixel(img, x, y2))
 
-    # linee verticali interne
-    for y in range(y1, y2, step):
+    for x in range(x_right_start, x2, step):
+        pixels.append(safe_getpixel(img, x, y1))
+        pixels.append(safe_getpixel(img, x, y2))
+
+    # linee verticali interne: solo alto e basso
+    for y in range(y1, y_top_end, step):
         pixels.append(safe_getpixel(img, x1, y))
         pixels.append(safe_getpixel(img, x2, y))
 
+    for y in range(y_bottom_start, y2, step):
+        pixels.append(safe_getpixel(img, x1, y))
+        pixels.append(safe_getpixel(img, x2, y))
+
+    if not pixels:
+        return 1.0
+
     white_count = sum(1 for p in pixels if is_near_white(p))
-    return white_count / max(1, len(pixels))
+    return white_count / len(pixels)
+
+
+def get_multi_inner_frame_check(img):
+    ratios = []
+    fails = 0
+
+    for offset in INNER_FRAME_OFFSETS:
+        ratio = get_inner_frame_white_ratio(img, offset)
+        ratios.append({
+            "offset": offset,
+            "white_ratio": round(ratio, 4)
+        })
+        if ratio < INNER_FRAME_WHITE_MIN:
+            fails += 1
+
+    detected = fails >= INNER_FRAME_REQUIRED_FAILS
+    worst_ratio = min((r["white_ratio"] for r in ratios), default=1.0)
+
+    return {
+        "detected": detected,
+        "fails": fails,
+        "worst_ratio": worst_ratio,
+        "ratios": ratios
+    }
 
 
 def get_content_box_metrics(img):
@@ -125,7 +171,9 @@ def build_response(
     status,
     reason,
     border_white_ratio=None,
-    inner_frame_white_ratio=None,
+    inner_frame_worst_ratio=None,
+    inner_frame_fails=None,
+    inner_frame_ratios=None,
     content_ratio=None,
     aspect_ratio=None
 ):
@@ -134,14 +182,17 @@ def build_response(
         "status": status,
         "reason": reason,
         "border_white_ratio": round(border_white_ratio, 4) if border_white_ratio is not None else None,
-        "inner_frame_white_ratio": round(inner_frame_white_ratio, 4) if inner_frame_white_ratio is not None else None,
+        "inner_frame_worst_ratio": round(inner_frame_worst_ratio, 4) if inner_frame_worst_ratio is not None else None,
+        "inner_frame_fails": inner_frame_fails,
+        "inner_frame_ratios": inner_frame_ratios,
         "content_ratio": round(content_ratio, 4) if content_ratio is not None else None,
         "aspect_ratio": round(aspect_ratio, 4) if aspect_ratio is not None else None,
         "debug_thresholds": {
             "WHITE_THRESHOLD": WHITE_THRESHOLD,
             "BORDER_WHITE_MIN": BORDER_WHITE_MIN,
-            "INNER_FRAME_OFFSET_RATIO": INNER_FRAME_OFFSET_RATIO,
+            "INNER_FRAME_OFFSETS": INNER_FRAME_OFFSETS,
             "INNER_FRAME_WHITE_MIN": INNER_FRAME_WHITE_MIN,
+            "INNER_FRAME_REQUIRED_FAILS": INNER_FRAME_REQUIRED_FAILS,
             "CONTENT_RATIO_MIN": CONTENT_RATIO_MIN,
             "ASPECT_RATIO_MIN": ASPECT_RATIO_MIN,
             "ASPECT_RATIO_MAX": ASPECT_RATIO_MAX
@@ -170,7 +221,7 @@ def analyze_image(image_url):
         img = Image.alpha_composite(white_bg, img).convert("RGB")
 
         border_white_ratio = get_border_white_ratio(img)
-        inner_frame_white_ratio = get_inner_frame_white_ratio(img)
+        inner_check = get_multi_inner_frame_check(img)
         metrics = get_content_box_metrics(img)
 
         content_ratio = metrics["content_ratio"]
@@ -182,23 +233,26 @@ def analyze_image(image_url):
                 True,
                 "yellow",
                 "background_not_white",
-                border_white_ratio,
-                inner_frame_white_ratio,
-                content_ratio,
-                aspect_ratio
+                border_white_ratio=border_white_ratio,
+                inner_frame_worst_ratio=inner_check["worst_ratio"],
+                inner_frame_fails=inner_check["fails"],
+                inner_frame_ratios=inner_check["ratios"],
+                content_ratio=content_ratio,
+                aspect_ratio=aspect_ratio
             )
 
-        # 2) Caso "immagine dentro il canvas"
-        # bordo esterno passa, ma la cornice interna rivela un rettangolo non armonico
-        if inner_frame_white_ratio < INNER_FRAME_WHITE_MIN:
+        # 2) Rettangolo interno / immagine dentro immagine
+        if inner_check["detected"]:
             return build_response(
                 True,
                 "yellow",
                 "inset_canvas_detected",
-                border_white_ratio,
-                inner_frame_white_ratio,
-                content_ratio,
-                aspect_ratio
+                border_white_ratio=border_white_ratio,
+                inner_frame_worst_ratio=inner_check["worst_ratio"],
+                inner_frame_fails=inner_check["fails"],
+                inner_frame_ratios=inner_check["ratios"],
+                content_ratio=content_ratio,
+                aspect_ratio=aspect_ratio
             )
 
         # 3) Nessun contenuto rilevato
@@ -207,10 +261,12 @@ def analyze_image(image_url):
                 True,
                 "green",
                 "white_background_empty",
-                border_white_ratio,
-                inner_frame_white_ratio,
-                content_ratio,
-                aspect_ratio
+                border_white_ratio=border_white_ratio,
+                inner_frame_worst_ratio=inner_check["worst_ratio"],
+                inner_frame_fails=inner_check["fails"],
+                inner_frame_ratios=inner_check["ratios"],
+                content_ratio=content_ratio,
+                aspect_ratio=aspect_ratio
             )
 
         # 4) Contenuto troppo piccolo
@@ -219,10 +275,12 @@ def analyze_image(image_url):
                 True,
                 "yellow",
                 "content_clearly_too_small",
-                border_white_ratio,
-                inner_frame_white_ratio,
-                content_ratio,
-                aspect_ratio
+                border_white_ratio=border_white_ratio,
+                inner_frame_worst_ratio=inner_check["worst_ratio"],
+                inner_frame_fails=inner_check["fails"],
+                inner_frame_ratios=inner_check["ratios"],
+                content_ratio=content_ratio,
+                aspect_ratio=aspect_ratio
             )
 
         # 5) Contenuto troppo rettangolare
@@ -231,10 +289,12 @@ def analyze_image(image_url):
                 True,
                 "yellow",
                 "content_clearly_too_rectangular",
-                border_white_ratio,
-                inner_frame_white_ratio,
-                content_ratio,
-                aspect_ratio
+                border_white_ratio=border_white_ratio,
+                inner_frame_worst_ratio=inner_check["worst_ratio"],
+                inner_frame_fails=inner_check["fails"],
+                inner_frame_ratios=inner_check["ratios"],
+                content_ratio=content_ratio,
+                aspect_ratio=aspect_ratio
             )
 
         # 6) Tutto ok
@@ -242,10 +302,12 @@ def analyze_image(image_url):
             True,
             "green",
             "white_background_ok",
-            border_white_ratio,
-            inner_frame_white_ratio,
-            content_ratio,
-            aspect_ratio
+            border_white_ratio=border_white_ratio,
+            inner_frame_worst_ratio=inner_check["worst_ratio"],
+            inner_frame_fails=inner_check["fails"],
+            inner_frame_ratios=inner_check["ratios"],
+            content_ratio=content_ratio,
+            aspect_ratio=aspect_ratio
         )
 
     except Exception as e:
@@ -260,12 +322,13 @@ def health():
     return jsonify({
         "ok": True,
         "message": "Analyzer online",
-        "version": "final-white245-innerframe",
+        "version": "final-white245-multi-inner-frame",
         "thresholds": {
             "WHITE_THRESHOLD": WHITE_THRESHOLD,
             "BORDER_WHITE_MIN": BORDER_WHITE_MIN,
-            "INNER_FRAME_OFFSET_RATIO": INNER_FRAME_OFFSET_RATIO,
+            "INNER_FRAME_OFFSETS": INNER_FRAME_OFFSETS,
             "INNER_FRAME_WHITE_MIN": INNER_FRAME_WHITE_MIN,
+            "INNER_FRAME_REQUIRED_FAILS": INNER_FRAME_REQUIRED_FAILS,
             "CONTENT_RATIO_MIN": CONTENT_RATIO_MIN,
             "ASPECT_RATIO_MIN": ASPECT_RATIO_MIN,
             "ASPECT_RATIO_MAX": ASPECT_RATIO_MAX
